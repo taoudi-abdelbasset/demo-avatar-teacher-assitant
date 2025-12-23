@@ -4,7 +4,7 @@ import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AvatarAnimationService } from '../avatar-animation.service';
+import { AvatarAnimationService } from '../services/avatar-animation.service';
 
 @Component({
   selector: 'app-avatar-viewer',
@@ -117,20 +117,20 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
   private animate = () => {
     requestAnimationFrame(this.animate);
     
-    // Make head follow camera
+    // Update body animations
+    this.animationService.updateBodyAnimations();
+    
+    // Make head follow camera (only if not overridden by animations)
     if (this.headBone && this.camera) {
-      // Get direction from head to camera
       const headWorldPos = new THREE.Vector3();
       this.headBone.getWorldPosition(headWorldPos);
       
       const direction = new THREE.Vector3();
       direction.subVectors(this.camera.position, headWorldPos).normalize();
       
-      // Calculate rotation angles
       const horizontalAngle = Math.atan2(direction.x, direction.z);
       const verticalAngle = Math.asin(direction.y);
       
-      // Apply with limits
       this.headBone.rotation.y = THREE.MathUtils.clamp(horizontalAngle, -0.7, 0.7);
       this.headBone.rotation.x = THREE.MathUtils.clamp(-verticalAngle, -0.5, 0.5);
     }

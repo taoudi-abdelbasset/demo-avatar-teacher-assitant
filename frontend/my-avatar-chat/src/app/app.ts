@@ -2,7 +2,7 @@ import { Component } from '@angular/core';
 import { AvatarViewerComponent } from './avatar-viewer/avatar-viewer';
 import { ChatInterfaceComponent } from './chat-interface/chat-interface';
 import { AvatarControlsComponent, FaceParameters, BodyParameters } from './avatar-controls/avatar-controls';
-import { AvatarAnimationService } from './avatar-animation.service'; // Import the service
+import { AvatarAnimationService } from './services/avatar-animation.service'; // Import the service
 
 @Component({
   selector: 'app-root',

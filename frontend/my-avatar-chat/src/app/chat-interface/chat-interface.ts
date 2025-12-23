@@ -1,6 +1,9 @@
 import { Component, ViewChild, ElementRef, AfterViewChecked } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { BackendService, BackendResponse } from '../services/backend.service';
+import { AudioPlaybackService } from '../services/audio-playback.service';
+import { AvatarAnimationService } from '../services/avatar-animation.service';
 
 interface Message {
   id: number;
@@ -8,6 +11,9 @@ interface Message {
   content: string;
   timestamp: Date;
   images?: string[];
+  audioUrl?: string;
+  csvData?: string;
+  isPlaying?: boolean;
 }
 
 interface Conversation {
@@ -51,6 +57,13 @@ export class ChatInterfaceComponent implements AfterViewChecked {
   inputMessage = '';
   selectedImages: string[] = [];
   private shouldScroll = false;
+  isProcessing = false;
+
+  constructor(
+    private backendService: BackendService,
+    private audioService: AudioPlaybackService,
+    private animationService: AvatarAnimationService
+  ) {}
 
   ngAfterViewChecked() {
     if (this.shouldScroll) {
@@ -76,46 +89,123 @@ export class ChatInterfaceComponent implements AfterViewChecked {
     return this.conversations.find(c => c.id === this.selectedConversationId);
   }
 
-  sendMessage() {
+  async sendMessage() {
     if (!this.inputMessage.trim() && this.selectedImages.length === 0) return;
+    if (this.isProcessing) return;
 
     const userMessage: Message = {
       id: this.messages.length + 1,
       role: 'user',
-      content: this.inputMessage || 'ðŸ“· Sent images',
+      content: this.inputMessage || '📷 Sent images',
       timestamp: new Date(),
       images: this.selectedImages.length > 0 ? [...this.selectedImages] : undefined
     };
 
     this.messages.push(userMessage);
     
-    // Update conversation last message
     const conv = this.conversations.find(c => c.id === this.selectedConversationId);
     if (conv) {
       conv.lastMessage = userMessage.content;
       conv.timestamp = new Date();
     }
 
+    const messageText = this.inputMessage;
+    const messageImages = this.selectedImages.length > 0 ? [...this.selectedImages] : undefined;
+    
     this.inputMessage = '';
     this.selectedImages = [];
     this.shouldScroll = true;
+    this.isProcessing = true;
 
-    // Simulate AI response
-    setTimeout(() => {
+    // Set avatar to thinking state
+    this.animationService.setAvatarState('thinking');
+
+    try {
+      // Call backend
+      const response = await this.backendService.sendMessage(messageText, messageImages);
+      
+      // Create AI message with response data
       const aiMessage: Message = {
         id: this.messages.length + 1,
         role: 'assistant',
-        content: 'Thanks for your message! This is a demo response.',
-        timestamp: new Date()
+        content: response.text,
+        timestamp: new Date(),
+        audioUrl: response.audioUrl,
+        csvData: response.csvData
       };
+
       this.messages.push(aiMessage);
 
       if (conv) {
         conv.lastMessage = aiMessage.content;
         conv.timestamp = new Date();
       }
+      
       this.shouldScroll = true;
-    }, 1000);
+
+      // Auto-play the response
+      await this.playMessageAudio(aiMessage);
+
+    } catch (error) {
+      console.error('Error sending message:', error);
+      
+      const errorMessage: Message = {
+        id: this.messages.length + 1,
+        role: 'assistant',
+        content: 'Sorry, there was an error processing your message.',
+        timestamp: new Date()
+      };
+      
+      this.messages.push(errorMessage);
+      this.shouldScroll = true;
+    } finally {
+      this.isProcessing = false;
+      this.animationService.setAvatarState('idle');
+    }
+  }
+
+  /**
+   * Play audio and lip-sync animation for a message
+   */
+  async playMessageAudio(message: Message) {
+    if (!message.audioUrl) return;
+
+    // Stop any current playback
+    this.audioService.stop();
+    this.animationService.stopLipSync();
+
+    // Mark message as playing
+    message.isPlaying = true;
+
+    try {
+      // Parse CSV data if available
+      let csvData: any[] = [];
+      if (message.csvData) {
+        csvData = this.backendService.parseCSV(message.csvData);
+      }
+
+      // Start lip-sync animation
+      if (csvData.length > 0) {
+        const audioStartTime = performance.now();
+        this.animationService.startLipSync(csvData, audioStartTime);
+      }
+
+      // Play audio
+      await this.audioService.playAudio(message.audioUrl, message.id);
+
+    } catch (error) {
+      console.error('Error playing audio:', error);
+    } finally {
+      message.isPlaying = false;
+      this.animationService.stopLipSync();
+    }
+  }
+
+  /**
+   * Replay button clicked
+   */
+  replayMessage(message: Message) {
+    this.playMessageAudio(message);
   }
 
   newChat() {
@@ -172,7 +262,6 @@ export class ChatInterfaceComponent implements AfterViewChecked {
       });
     }
     
-    // Reset input
     input.value = '';
   }
 
@@ -186,7 +275,8 @@ export class ChatInterfaceComponent implements AfterViewChecked {
 
   private scrollToBottom() {
     try {
-      this.messagesContainer.nativeElement.scrollTop = this.messagesContainer.nativeElement.scrollHeight;
+      this.messagesContainer.nativeElement.scrollTop = 
+        this.messagesContainer.nativeElement.scrollHeight;
     } catch (err) {
       console.error('Scroll error:', err);
     }
