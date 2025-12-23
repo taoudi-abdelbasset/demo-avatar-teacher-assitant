@@ -82,7 +82,7 @@ export class ChatInterfaceComponent implements AfterViewChecked {
     const userMessage: Message = {
       id: this.messages.length + 1,
       role: 'user',
-      content: this.inputMessage || '📷 Sent images',
+      content: this.inputMessage || 'ðŸ“· Sent images',
       timestamp: new Date(),
       images: this.selectedImages.length > 0 ? [...this.selectedImages] : undefined
     };

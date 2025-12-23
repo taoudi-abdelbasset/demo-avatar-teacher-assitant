@@ -4,11 +4,14 @@
     <app-avatar-viewer></app-avatar-viewer>
   </div>
 
-  <!-- Resizable Divider -->
-  <div class="w-1 bg-gray-300 hover:bg-purple-500 cursor-col-resize transition-colors"></div>
-
-  <!-- Right Side: Chat Interface (40%) -->
-  <div class="w-[40%] relative">
+  <!-- Middle: Chat Interface (expandable) -->
+  <div class="flex-1 relative">
     <app-chat-interface></app-chat-interface>
   </div>
+
+  <!-- Right Side: Avatar Controls -->
+  <app-avatar-controls
+    (faceChanged)="onFaceChanged($event)"
+    (bodyChanged)="onBodyChanged($event)">
+  </app-avatar-controls>
 </div>

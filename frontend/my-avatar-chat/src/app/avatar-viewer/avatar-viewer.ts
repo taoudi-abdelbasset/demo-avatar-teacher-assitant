@@ -4,6 +4,7 @@ import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { AvatarAnimationService } from '../avatar-animation.service';
 
 @Component({
   selector: 'app-avatar-viewer',
@@ -26,10 +27,12 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
   private controls!: OrbitControls;
   private currentAvatarUrl = 'https://models.readyplayer.me/66473ec24c3b647e2d45ab9b.glb?morphTargets=ARKit&textureAtlas=1024';
   private isBrowser: boolean;
+  private headBone: any = null;
 
   constructor(
     private sanitizer: DomSanitizer,
-    @Inject(PLATFORM_ID) platformId: Object
+    @Inject(PLATFORM_ID) platformId: Object,
+    private animationService: AvatarAnimationService
   ) {
     this.isBrowser = isPlatformBrowser(platformId);
     this.avatarCreatorUrl = this.sanitizer.bypassSecurityTrustResourceUrl(
@@ -77,7 +80,7 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
       0.1,
       1000
     );
-    this.camera.position.set(0, 0.2, 0.8);
+    this.camera.position.set(0, 0.15, 0.4);
 
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -88,7 +91,7 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
     // Controls
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
-    this.controls.target.set(0, 0.1, 0);
+    this.controls.target.set(0, 0.15, 0);
     this.controls.minDistance = 0.3;
     this.controls.maxDistance = 3;
 
@@ -113,6 +116,25 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
 
   private animate = () => {
     requestAnimationFrame(this.animate);
+    
+    // Make head follow camera
+    if (this.headBone && this.camera) {
+      // Get direction from head to camera
+      const headWorldPos = new THREE.Vector3();
+      this.headBone.getWorldPosition(headWorldPos);
+      
+      const direction = new THREE.Vector3();
+      direction.subVectors(this.camera.position, headWorldPos).normalize();
+      
+      // Calculate rotation angles
+      const horizontalAngle = Math.atan2(direction.x, direction.z);
+      const verticalAngle = Math.asin(direction.y);
+      
+      // Apply with limits
+      this.headBone.rotation.y = THREE.MathUtils.clamp(horizontalAngle, -0.7, 0.7);
+      this.headBone.rotation.x = THREE.MathUtils.clamp(-verticalAngle, -0.5, 0.5);
+    }
+    
     if (this.controls) this.controls.update();
     if (this.renderer && this.scene && this.camera) {
       this.renderer.render(this.scene, this.camera);
@@ -158,12 +180,36 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
         const center = box.getCenter(new THREE.Vector3());
         gltf.scene.position.sub(center);
 
+        // Store morph target meshes
+        const morphMeshes: any[] = [];
+        gltf.scene.traverse((node: any) => {
+          if (node.morphTargetDictionary && node.morphTargetInfluences) {
+            morphMeshes.push(node);
+          }
+        });
+
+        // Find and store head bone for camera tracking
+        this.headBone = null;
+        gltf.scene.traverse((node: any) => {
+          if (node.isBone) {
+            const name = node.name.toLowerCase();
+            if (name.includes('head') || name === 'head') {
+              this.headBone = node;
+              console.log('ðŸŽ¯ Found head bone:', node.name);
+            }
+          }
+        });
+
+        // Share with service
+        this.animationService.setAvatarData(morphMeshes, gltf.scene);
+        console.log('ðŸ“¤ Sent', morphMeshes.length, 'morph meshes to service');
+
         this.loadingProgress = 100;
         this.loadingStatus = 'Complete!';
 
         setTimeout(() => {
           this.isLoading = false;
-          console.log('✅ Avatar loaded successfully');
+          console.log('âœ… Avatar loaded successfully');
         }, 500);
       },
       (progress: any) => {
@@ -181,7 +227,7 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
         }
       },
       (error: any) => {
-        console.error('❌ Error loading avatar:', error);
+        console.error('âŒ Error loading avatar:', error);
         this.loadingStatus = 'Error loading avatar';
         this.isLoading = false;
       }
@@ -194,8 +240,8 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
 
   resetCamera() {
     if (this.camera && this.controls) {
-      this.camera.position.set(0, 0.2, 0.8);
-      this.controls.target.set(0, 0.1, 0);
+      this.camera.position.set(0, 0.15, 0.4);
+      this.controls.target.set(0, 0.15, 0);
       this.controls.update();
     }
   }
@@ -221,7 +267,7 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
 
       // Handle avatar export
       if (json.eventName === 'v1.avatar.exported') {
-        console.log('🎉 New avatar created:', json.data.url);
+        console.log('ðŸŽ‰ New avatar created:', json.data.url);
         this.currentAvatarUrl = json.data.url;
         
         // Save to localStorage
