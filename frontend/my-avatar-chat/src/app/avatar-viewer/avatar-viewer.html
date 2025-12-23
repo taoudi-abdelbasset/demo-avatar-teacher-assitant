@@ -1,0 +1,70 @@
+<div class="relative w-full h-full bg-gradient-to-br from-purple-900 via-purple-800 to-blue-900">
+  <!-- 3D Viewer Container -->
+  <div id="viewer" class="w-full h-full"></div>
+
+  <!-- Control Buttons -->
+  <div class="absolute top-6 right-6 flex gap-3 z-10">
+    <button 
+      (click)="changeAvatar()"
+      class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-all shadow-lg flex items-center gap-2">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+      </svg>
+      Change Avatar
+    </button>
+    
+    <button 
+      (click)="resetCamera()"
+      class="px-6 py-3 bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white rounded-lg font-medium transition-all shadow-lg flex items-center gap-2">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+      </svg>
+      Reset Camera
+    </button>
+  </div>
+
+  <!-- Loading Overlay with Progress -->
+  <div *ngIf="isLoading" class="absolute inset-0 bg-purple-900/95 flex items-center justify-center z-20">
+    <div class="text-center text-white">
+      <!-- Circular Progress -->
+      <div class="relative w-32 h-32 mx-auto mb-6">
+        <!-- Background Circle -->
+        <svg class="w-32 h-32 transform -rotate-90">
+          <circle 
+            cx="64" 
+            cy="64" 
+            r="56" 
+            stroke="rgba(255,255,255,0.2)" 
+            stroke-width="8" 
+            fill="none" />
+          <!-- Progress Circle -->
+          <circle 
+            cx="64" 
+            cy="64" 
+            r="56" 
+            stroke="white" 
+            stroke-width="8" 
+            fill="none"
+            [attr.stroke-dasharray]="circumference"
+            [attr.stroke-dashoffset]="circumference - (loadingProgress / 100) * circumference"
+            class="transition-all duration-300" />
+        </svg>
+        <!-- Percentage Text -->
+        <div class="absolute inset-0 flex items-center justify-center">
+          <span class="text-3xl font-bold">{{ loadingProgress }}%</span>
+        </div>
+      </div>
+      
+      <p class="text-lg font-medium">Loading avatar...</p>
+      <p class="text-sm text-white/70 mt-2">{{ loadingStatus }}</p>
+    </div>
+  </div>
+
+  <!-- Ready Player Me iframe -->
+  <iframe 
+    *ngIf="showAvatarCreator"
+    [src]="avatarCreatorUrl"
+    class="absolute inset-0 w-full h-full z-30 border-none"
+    allow="camera *; microphone *; clipboard-write">
+  </iframe>
+</div>
