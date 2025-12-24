@@ -19,7 +19,7 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
   loadingStatus = 'Initializing...';
   showAvatarCreator = false;
   avatarCreatorUrl: SafeResourceUrl;
-  circumference = 2 * Math.PI * 56; // Circle circumference for progress
+  circumference = 2 * Math.PI * 56;
   
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
@@ -28,6 +28,14 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
   private currentAvatarUrl = 'https://models.readyplayer.me/66473ec24c3b647e2d45ab9b.glb?morphTargets=ARKit&textureAtlas=1024';
   private isBrowser: boolean;
   private headBone: any = null;
+  
+  // For smooth camera following
+  private targetCameraPosition = new THREE.Vector3();
+  private targetLookAt = new THREE.Vector3();
+  private cameraOffset = new THREE.Vector3(0, 0, 0.8); // Offset from head
+  private smoothingFactor = 0.1; // Lower = smoother, 0.1 = smooth
+  private followHeadMode = true; // Toggle for camera following
+  private userInteracted = false; // Track if user manually moved camera
 
   constructor(
     private sanitizer: DomSanitizer,
@@ -43,7 +51,6 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
   ngOnInit() {
     if (!this.isBrowser) return;
 
-    // Load saved avatar URL from localStorage
     const savedAvatar = localStorage.getItem('avatarUrl');
     if (savedAvatar) {
       this.currentAvatarUrl = savedAvatar;
@@ -51,14 +58,11 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
 
     this.initScene();
     this.loadAvatar(this.currentAvatarUrl);
-
-    // Listen for Ready Player Me messages
     window.addEventListener('message', this.handleAvatarMessage.bind(this));
   }
 
   ngOnDestroy() {
     if (!this.isBrowser) return;
-    
     window.removeEventListener('message', this.handleAvatarMessage.bind(this));
     if (this.renderer) {
       this.renderer.dispose();
@@ -69,70 +73,77 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
     const container = document.getElementById('viewer');
     if (!container) return;
 
-    // Scene
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x667eea);
 
-    // Camera
     this.camera = new THREE.PerspectiveCamera(
       45,
       container.clientWidth / container.clientHeight,
       0.1,
       1000
     );
-    this.camera.position.set(0, 0.15, 0.4);
+    this.camera.position.set(0, 1.6, 0.8);
 
-    // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(this.renderer.domElement);
 
-    // Controls
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
-    this.controls.target.set(0, 0.15, 0);
-    this.controls.minDistance = 0.3;
-    this.controls.maxDistance = 3;
+    this.controls.dampingFactor = 0.05;
+    this.controls.target.set(0, 1.6, 0);
+    this.controls.minDistance = 0.5;
+    this.controls.maxDistance = 2;
 
-    // Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+    // Detect when user interacts with controls to disable follow mode
+    this.controls.addEventListener('start', () => {
+      this.userInteracted = true;
+      this.followHeadMode = false;
+    });
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
     this.scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
     directionalLight.position.set(5, 10, 7);
     this.scene.add(directionalLight);
 
-    const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.8);
     fillLight.position.set(-5, 5, -5);
     this.scene.add(fillLight);
 
-    // Handle window resize
     window.addEventListener('resize', () => this.onWindowResize());
-
-    // Start animation loop
     this.animate();
   }
 
   private animate = () => {
     requestAnimationFrame(this.animate);
     
-    // Update body animations
     this.animationService.updateBodyAnimations();
     
-    // Make head follow camera (only if not overridden by animations)
-    if (this.headBone && this.camera) {
+    // **SMOOTH CAMERA FOLLOWING WITH ROTATION** 🎯
+    if (this.headBone && this.followHeadMode) {
+      // Get head world position
       const headWorldPos = new THREE.Vector3();
       this.headBone.getWorldPosition(headWorldPos);
       
-      const direction = new THREE.Vector3();
-      direction.subVectors(this.camera.position, headWorldPos).normalize();
+      // Get head world rotation
+      const headWorldQuat = new THREE.Quaternion();
+      this.headBone.getWorldQuaternion(headWorldQuat);
       
-      const horizontalAngle = Math.atan2(direction.x, direction.z);
-      const verticalAngle = Math.asin(direction.y);
+      // Calculate camera offset based on head rotation
+      const rotatedOffset = this.cameraOffset.clone().applyQuaternion(headWorldQuat);
       
-      this.headBone.rotation.y = THREE.MathUtils.clamp(horizontalAngle, -0.7, 0.7);
-      this.headBone.rotation.x = THREE.MathUtils.clamp(-verticalAngle, -0.5, 0.5);
+      // Target camera position = head position + rotated offset
+      this.targetCameraPosition.copy(headWorldPos).add(rotatedOffset);
+      
+      // Smoothly interpolate camera position
+      this.camera.position.lerp(this.targetCameraPosition, this.smoothingFactor);
+      
+      // Smoothly interpolate look-at target
+      this.targetLookAt.copy(headWorldPos);
+      this.controls.target.lerp(this.targetLookAt, this.smoothingFactor);
     }
     
     if (this.controls) this.controls.update();
@@ -163,7 +174,6 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
         this.loadingStatus = 'Processing model...';
         this.loadingProgress = 90;
 
-        // Clear previous avatar (keep lights)
         const objectsToRemove: THREE.Object3D[] = [];
         this.scene.children.forEach((child) => {
           if (!(child instanceof THREE.Light)) {
@@ -172,15 +182,18 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
         });
         objectsToRemove.forEach((obj) => this.scene.remove(obj));
 
-        // Add new avatar
         this.scene.add(gltf.scene);
         
-        // Center the model
         const box = new THREE.Box3().setFromObject(gltf.scene);
         const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        
         gltf.scene.position.sub(center);
+        gltf.scene.position.y = 0;
+        
+        console.log(`📏 Avatar size: ${size.y.toFixed(2)}m tall`);
+        console.log(`📍 Avatar positioned at origin`);
 
-        // Store morph target meshes
         const morphMeshes: any[] = [];
         gltf.scene.traverse((node: any) => {
           if (node.morphTargetDictionary && node.morphTargetInfluences) {
@@ -188,33 +201,40 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
           }
         });
 
-        // Find and store head bone for camera tracking
         this.headBone = null;
         gltf.scene.traverse((node: any) => {
           if (node.isBone) {
             const name = node.name.toLowerCase();
-            if (name.includes('head') || name === 'head') {
+            if (name === 'head' || name.includes('head')) {
               this.headBone = node;
-              console.log('ðŸŽ¯ Found head bone:', node.name);
+              console.log('🎯 Found head bone:', node.name);
             }
           }
         });
 
-        // Share with service
-        this.animationService.setAvatarData(morphMeshes, gltf.scene);
-        console.log('ðŸ“¤ Sent', morphMeshes.length, 'morph meshes to service');
+        if (gltf.animations && gltf.animations.length > 0) {
+          console.log('🎬 Built-in animations found:', gltf.animations.length);
+          gltf.animations.forEach((clip: THREE.AnimationClip, i: number) => {
+            console.log(`  ${i}: ${clip.name} (${clip.duration.toFixed(2)}s)`);
+          });
+        } else {
+          console.log('ℹ️ No built-in animations in this model');
+        }
+
+        this.animationService.setAvatarData(morphMeshes, gltf.scene, gltf.animations);
+        console.log('📤 Sent', morphMeshes.length, 'morph meshes to service');
 
         this.loadingProgress = 100;
         this.loadingStatus = 'Complete!';
 
         setTimeout(() => {
           this.isLoading = false;
-          console.log('âœ… Avatar loaded successfully');
+          console.log('✅ Avatar loaded successfully');
         }, 500);
       },
       (progress: any) => {
         if (progress.total > 0) {
-          const percent = Math.floor((progress.loaded / progress.total) * 90); // 0-90%
+          const percent = Math.floor((progress.loaded / progress.total) * 90);
           this.loadingProgress = percent;
           
           if (percent < 30) {
@@ -227,7 +247,7 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
         }
       },
       (error: any) => {
-        console.error('âŒ Error loading avatar:', error);
+        console.error('❌ Error loading avatar:', error);
         this.loadingStatus = 'Error loading avatar';
         this.isLoading = false;
       }
@@ -239,11 +259,18 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
   }
 
   resetCamera() {
+    this.followHeadMode = true;
+    this.userInteracted = false;
     if (this.camera && this.controls) {
-      this.camera.position.set(0, 0.15, 0.4);
-      this.controls.target.set(0, 0.15, 0);
+      this.camera.position.set(0, 1.6, 0.8);
+      this.controls.target.set(0, 1.6, 0);
       this.controls.update();
     }
+  }
+
+  toggleFollowMode() {
+    this.followHeadMode = !this.followHeadMode;
+    console.log('📷 Follow mode:', this.followHeadMode ? 'ON' : 'OFF');
   }
 
   private handleAvatarMessage(event: MessageEvent) {
@@ -252,7 +279,6 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
       
       if (json?.source !== 'readyplayerme') return;
 
-      // Subscribe to events when iframe is ready
       if (json.eventName === 'v1.frame.ready') {
         const iframe = document.querySelector('iframe');
         iframe?.contentWindow?.postMessage(
@@ -265,15 +291,10 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
         );
       }
 
-      // Handle avatar export
       if (json.eventName === 'v1.avatar.exported') {
-        console.log('ðŸŽ‰ New avatar created:', json.data.url);
+        console.log('🎨 New avatar created:', json.data.url);
         this.currentAvatarUrl = json.data.url;
-        
-        // Save to localStorage
         localStorage.setItem('avatarUrl', json.data.url);
-        
-        // Close iframe and load new avatar
         this.showAvatarCreator = false;
         this.loadAvatar(this.currentAvatarUrl);
       }

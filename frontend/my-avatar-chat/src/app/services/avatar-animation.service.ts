@@ -13,101 +13,102 @@ export class AvatarAnimationService {
   private animationFrameId: number | null = null;
   private lipSyncData: any[] = [];
   private lipSyncStartTime: number = 0;
+  private builtInAnimations: any[] = [];
 
-  // Avatar state
   private avatarStateSubject = new BehaviorSubject<AvatarState>('idle');
   avatarState$ = this.avatarStateSubject.asObservable();
 
-  // Observable for when avatar is loaded
   private avatarLoadedSubject = new BehaviorSubject<boolean>(false);
   avatarLoaded$ = this.avatarLoadedSubject.asObservable();
 
   constructor(private bodyAnimationLoader: BodyAnimationLoaderService) {}
 
-  setAvatarData(meshes: any[], model: any) {
+  setAvatarData(meshes: any[], model: any, animations?: any[]) {
     this.morphTargetMeshes = meshes;
     this.avatarModel = model;
+    this.builtInAnimations = animations || [];
     this.avatarLoadedSubject.next(true);
     
-    // Initialize body animation loader
-    this.bodyAnimationLoader.setAvatarModel(model);
+    this.bodyAnimationLoader.setAvatarModel(model, animations);
     
-    console.log('✅ Avatar data set in service:', meshes.length, 'meshes');
+    console.log('✅ Avatar data set:', meshes.length, 'meshes');
+    if (this.builtInAnimations.length > 0) {
+      console.log('🎬 Built-in animations:', this.builtInAnimations.length);
+    }
     
-    // Start idle animation by default
-    this.setAvatarState('idle');
+    // Start idle after animations load
+    setTimeout(() => {
+      this.setAvatarState('idle');
+    }, 1000);
   }
 
-  /**
-   * Set avatar state (idle, thinking, talking)
-   */
   setAvatarState(state: AvatarState) {
+    const previousState = this.avatarStateSubject.value;
     this.avatarStateSubject.next(state);
-    console.log('🎭 Avatar state:', state);
+    console.log(`🎭 Avatar: ${previousState} → ${state}`);
     
-    // Play corresponding body animation
-    this.bodyAnimationLoader.playRandomAnimation(state, true);
+    if (this.bodyAnimationLoader.isReady()) {
+      this.bodyAnimationLoader.playRandomAnimation(state, true);
+    } else {
+      console.log('⏳ Waiting for animations...');
+      setTimeout(() => {
+        if (this.bodyAnimationLoader.isReady()) {
+          this.bodyAnimationLoader.playRandomAnimation(state, true);
+        }
+      }, 2000);
+    }
   }
 
-  /**
-   * Update body animations (call in animation loop)
-   */
   updateBodyAnimations() {
     this.bodyAnimationLoader.update();
   }
 
-  /**
-   * Start lip-sync animation with CSV data
-   */
   startLipSync(csvData: any[], audioStartTime: number) {
     this.stopLipSync();
     this.lipSyncData = csvData;
     this.lipSyncStartTime = audioStartTime;
     this.setAvatarState('talking');
+    console.log('🎤 Starting lip-sync with', csvData.length, 'frames');
     this.animateLipSync();
   }
 
-  /**
-   * Stop lip-sync animation
-   */
   stopLipSync() {
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
     }
-    this.setAvatarState('idle');
     this.resetFace();
+    console.log('🛑 Lip-sync stopped');
   }
 
-  /**
-   * Animate lip-sync based on CSV data
-   */
   private animateLipSync = () => {
-    if (!this.lipSyncData.length) return;
+    if (!this.lipSyncData.length) {
+      console.warn('⚠️ No lip-sync data available');
+      return;
+    }
 
     const currentTime = (performance.now() - this.lipSyncStartTime) / 1000;
     
-    // Find the closest frame in CSV data
+    // Find closest frame (30fps = 0.033s tolerance)
     const frame = this.lipSyncData.find(f => 
-      Math.abs(f.timeCode - currentTime) < 0.033 // ~30fps tolerance
-    ) || this.lipSyncData[this.lipSyncData.length - 1];
+      Math.abs(f.timeCode - currentTime) < 0.033
+    );
 
     if (frame) {
-      // Apply blendshapes from CSV
       this.applyCSVBlendshapes(frame);
     }
 
-    // Check if we've reached the end
-    if (currentTime < this.lipSyncData[this.lipSyncData.length - 1].timeCode) {
+    // Continue animation if we haven't reached the end
+    const lastFrameTime = this.lipSyncData[this.lipSyncData.length - 1].timeCode;
+    if (currentTime < lastFrameTime) {
       this.animationFrameId = requestAnimationFrame(this.animateLipSync);
     } else {
+      console.log('✅ Lip-sync animation complete');
       this.stopLipSync();
+      this.setAvatarState('idle');
     }
   }
 
-  /**
-   * Apply blendshapes from CSV data
-   */
   private applyCSVBlendshapes(frame: any) {
     if (this.morphTargetMeshes.length === 0) return;
 
@@ -115,22 +116,16 @@ export class AvatarAnimationService {
       const dict = mesh.morphTargetDictionary;
       if (!dict) return;
 
-      // Process each key in the frame
       Object.keys(frame).forEach(csvKey => {
-        // Skip non-blendshape keys
         if (!csvKey.startsWith('blendShapes.')) return;
         
-        // Convert CSV key to Three.js morph target name
-        // "blendShapes.EyeBlinkLeft" -> "eyeBlinkLeft"
         const morphKey = csvKey.replace('blendShapes.', '');
         const morphKeyLowerFirst = morphKey.charAt(0).toLowerCase() + morphKey.slice(1);
         
-        // Try to find the morph target
         const dictIndex = dict[morphKeyLowerFirst];
         if (dictIndex !== undefined) {
           mesh.morphTargetInfluences[dictIndex] = frame[csvKey];
         } else {
-          // Also try the original case in case the avatar uses it
           const dictIndexAlt = dict[morphKey];
           if (dictIndexAlt !== undefined) {
             mesh.morphTargetInfluences[dictIndexAlt] = frame[csvKey];
@@ -140,9 +135,6 @@ export class AvatarAnimationService {
     });
   }
 
-  /**
-   * Apply face blendshapes (manual control)
-   */
   applyFaceBlendshapes(params: any) {
     if (this.morphTargetMeshes.length === 0) {
       console.warn('⚠️ No morph target meshes available');
@@ -177,9 +169,6 @@ export class AvatarAnimationService {
     });
   }
 
-  /**
-   * Apply body bone rotations
-   */
   applyBodyRotations(params: any) {
     if (!this.avatarModel) {
       console.warn('⚠️ No avatar model available');
@@ -206,9 +195,6 @@ export class AvatarAnimationService {
     }
   }
 
-  /**
-   * Reset face to neutral
-   */
   private resetFace() {
     this.morphTargetMeshes.forEach(mesh => {
       if (mesh.morphTargetInfluences) {
@@ -217,9 +203,6 @@ export class AvatarAnimationService {
     });
   }
 
-  /**
-   * Reset all animations
-   */
   resetAll() {
     this.stopLipSync();
     this.resetFace();
@@ -231,5 +214,7 @@ export class AvatarAnimationService {
         }
       });
     }
+    
+    this.setAvatarState('idle');
   }
 }

@@ -1,21 +1,35 @@
 import { Injectable } from '@angular/core';
 import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-export type BodyAnimationState = 'idle' | 'thinking' | 'talking';
+export type AnimationState = 'idle' | 'thinking' | 'talking';
+
+interface AnimationClip {
+  name: string;
+  clip: THREE.AnimationClip;
+  action?: THREE.AnimationAction;
+  state: AnimationState;
+}
 
 @Injectable({
   providedIn: 'root'
 })
 export class BodyAnimationLoaderService {
+  private avatarModel: THREE.Object3D | null = null;
   private mixer: THREE.AnimationMixer | null = null;
+  private animationClips: AnimationClip[] = [];
   private currentAction: THREE.AnimationAction | null = null;
   private clock = new THREE.Clock();
-  private avatarModel: any = null;
-  private animationCache = new Map<string, THREE.AnimationClip>();
+  private isLoading = false;
+  private isLoaded = false;
+  
+  private idleAnimations: AnimationClip[] = [];
+  private thinkingAnimations: AnimationClip[] = [];
+  private talkingAnimations: AnimationClip[] = [];
 
-  // Animation file paths - YOU CAN USE FBX OR GLB!
+  // 🎯 INSTANT SWITCH - Only 0.3s crossfade at transition moment
+  private crossFadeDuration = 0.3; // Super quick blend
+
   private animationPaths = {
     idle: [
       '/assets/body-animations/idle/breathing_idle.fbx',
@@ -23,6 +37,7 @@ export class BodyAnimationLoaderService {
       '/assets/body-animations/idle/looking_around.fbx'
     ],
     thinking: [
+      '/assets/body-animations/thinking/looking_around.fbx'
     ],
     talking: [
       '/assets/body-animations/talking/talking.fbx',
@@ -30,132 +45,277 @@ export class BodyAnimationLoaderService {
     ]
   };
 
-  setAvatarModel(model: any) {
+  constructor() {}
+
+  setAvatarModel(model: THREE.Object3D, animations?: THREE.AnimationClip[]) {
     this.avatarModel = model;
-    this.mixer = new THREE.AnimationMixer(model);
-    console.log('🎬 Animation mixer initialized for body animations');
-  }
-
-  /**
-   * Play a random animation from the specified category
-   */
-  async playRandomAnimation(state: BodyAnimationState, loop: boolean = true) {
-    if (!this.mixer || !this.avatarModel) {
-      console.warn('⚠️ Avatar not ready for animations');
-      return;
-    }
-
-    // Stop current animation
-    this.stop();
-
-    // Select random animation from category
-    const animations = this.animationPaths[state];
-    const randomIndex = Math.floor(Math.random() * animations.length);
-    const selectedPath = animations[randomIndex];
-
-    console.log(`🎭 Loading ${state} animation: ${selectedPath}`);
-
-    try {
-      // Load animation
-      const clip = await this.loadAnimation(selectedPath);
+    
+    if (this.avatarModel) {
+      this.mixer = new THREE.AnimationMixer(this.avatarModel);
+      console.log('🎬 Animation mixer created');
       
-      if (clip) {
-        // Play animation
-        this.playAnimation(clip, loop);
-      } else {
-        console.warn('⚠️ No animation clip found, using procedural fallback');
-        this.playProceduralAnimation(state);
-      }
-    } catch (error) {
-      console.error('Failed to load animation:', error);
-      this.playProceduralAnimation(state);
+      const bones: string[] = [];
+      this.avatarModel.traverse((node: any) => {
+        if (node.isBone) {
+          bones.push(node.name);
+        }
+      });
+      console.log(`🦴 Found ${bones.length} bones:`, bones.slice(0, 10).join(', '));
+    }
+
+    if (animations && animations.length > 0) {
+      console.log('✅ Using built-in animations');
+      this.loadBuiltInAnimations(animations);
+    } else {
+      console.log('📦 Loading external FBX animations...');
+      this.loadExternalAnimations();
     }
   }
 
-  /**
-   * Load animation from FBX or GLB file
-   */
-  private async loadAnimation(path: string): Promise<THREE.AnimationClip | null> {
-    // Check cache first
-    if (this.animationCache.has(path)) {
-      return this.animationCache.get(path)!;
-    }
+  private loadBuiltInAnimations(clips: THREE.AnimationClip[]) {
+    this.animationClips = [];
+    this.idleAnimations = [];
+    this.thinkingAnimations = [];
+    this.talkingAnimations = [];
 
-    return new Promise((resolve, reject) => {
-      const extension = path.split('.').pop()?.toLowerCase();
-
-      if (extension === 'fbx') {
-        const loader = new FBXLoader();
-        loader.load(
-          path,
-          (object) => {
-            if (object.animations && object.animations.length > 0) {
-              const clip = object.animations[0];
-              this.animationCache.set(path, clip);
-              console.log('✅ Loaded FBX animation:', path);
-              resolve(clip);
-            } else {
-              console.warn('⚠️ No animations in FBX file');
-              resolve(null);
-            }
-          },
-          undefined,
-          (error) => {
-            console.error('Error loading FBX:', error);
-            reject(error);
-          }
-        );
-      } else if (extension === 'glb' || extension === 'gltf') {
-        const loader = new GLTFLoader();
-        loader.load(
-          path,
-          (gltf) => {
-            if (gltf.animations && gltf.animations.length > 0) {
-              const clip = gltf.animations[0];
-              this.animationCache.set(path, clip);
-              console.log('✅ Loaded GLB animation:', path);
-              resolve(clip);
-            } else {
-              console.warn('⚠️ No animations in GLB file');
-              resolve(null);
-            }
-          },
-          undefined,
-          (error) => {
-            console.error('Error loading GLB:', error);
-            reject(error);
-          }
-        );
-      } else {
-        reject(new Error('Unsupported file format: ' + extension));
+    clips.forEach((clip: THREE.AnimationClip, index: number) => {
+      const name = clip.name.toLowerCase();
+      let state: AnimationState = 'idle';
+      
+      if (name.includes('think') || name.includes('ponder')) {
+        state = 'thinking';
+      } else if (name.includes('talk') || name.includes('speak')) {
+        state = 'talking';
       }
+
+      const animClip: AnimationClip = {
+        name: clip.name,
+        clip: clip,
+        state: state
+      };
+
+      this.animationClips.push(animClip);
+
+      if (state === 'idle') this.idleAnimations.push(animClip);
+      else if (state === 'thinking') this.thinkingAnimations.push(animClip);
+      else if (state === 'talking') this.talkingAnimations.push(animClip);
+
+      console.log(`📋 Animation ${index}: "${clip.name}" (${clip.duration.toFixed(2)}s)`);
+    });
+
+    this.isLoaded = true;
+    this.logAnimationStats();
+  }
+
+  private async loadExternalAnimations() {
+    if (this.isLoading || this.isLoaded) return;
+    this.isLoading = true;
+
+    const loader = new FBXLoader();
+    const loadPromises: Promise<void>[] = [];
+
+    this.animationPaths.idle.forEach(path => {
+      const promise = this.loadAnimation(loader, path, 'idle');
+      loadPromises.push(promise);
+    });
+
+    this.animationPaths.thinking.forEach(path => {
+      const promise = this.loadAnimation(loader, path, 'thinking');
+      loadPromises.push(promise);
+    });
+
+    this.animationPaths.talking.forEach(path => {
+      const promise = this.loadAnimation(loader, path, 'talking');
+      loadPromises.push(promise);
+    });
+
+    await Promise.all(loadPromises);
+    
+    this.isLoaded = true;
+    this.isLoading = false;
+    this.logAnimationStats();
+  }
+
+  private loadAnimation(loader: FBXLoader, path: string, state: AnimationState): Promise<void> {
+    return new Promise((resolve) => {
+      loader.load(
+        path,
+        (fbx) => {
+          if (fbx.animations && fbx.animations.length > 0) {
+            fbx.animations.forEach((clip) => {
+              console.log(`📊 Original FBX: ${clip.name} (${clip.duration.toFixed(2)}s, ${clip.tracks.length} tracks)`);
+              
+              const retargetedClip = this.retargetAnimation(clip);
+              
+              const animClip: AnimationClip = {
+                name: path.split('/').pop()?.replace('.fbx', '') || 'unknown',
+                clip: retargetedClip,
+                state: state
+              };
+
+              this.animationClips.push(animClip);
+
+              if (state === 'idle') this.idleAnimations.push(animClip);
+              else if (state === 'thinking') this.thinkingAnimations.push(animClip);
+              else if (state === 'talking') this.talkingAnimations.push(animClip);
+
+              console.log(`✅ Loaded & retargeted ${state} animation: ${animClip.name}`);
+            });
+          }
+          resolve();
+        },
+        undefined,
+        (error) => {
+          console.warn(`⚠️ Failed to load animation ${path}:`, error);
+          resolve();
+        }
+      );
     });
   }
 
-  /**
-   * Play animation clip
-   */
-  private playAnimation(clip: THREE.AnimationClip, loop: boolean) {
-    if (!this.mixer) return;
+  private retargetAnimation(clip: THREE.AnimationClip): THREE.AnimationClip {
+    const newTracks = clip.tracks
+      .filter(track => {
+        if (track.name.includes('.position')) {
+          console.log(`❌ Removed position track: ${track.name}`);
+          return false;
+        }
+        return true;
+      })
+      .map(track => {
+        const newTrack = track.clone();
+        newTrack.name = track.name.replace('mixamorig', '');
+        return newTrack;
+      });
 
-    // Create action
-    this.currentAction = this.mixer.clipAction(clip);
+    const retargetedClip = new THREE.AnimationClip(clip.name, clip.duration, newTracks);
+    console.log(`✅ Retargeted to ${newTracks.length} tracks (rotations only)`);
     
-    // Set loop mode
-    this.currentAction.loop = loop ? THREE.LoopRepeat : THREE.LoopOnce;
-    this.currentAction.clampWhenFinished = !loop;
-    
-    // Fade in animation
-    this.currentAction.reset();
-    this.currentAction.fadeIn(0.5);
-    this.currentAction.play();
-
-    console.log('▶️ Playing animation');
+    return retargetedClip;
   }
 
-  /**
-   * Update animation mixer (call this in animation loop)
-   */
+  private logAnimationStats() {
+    console.log(`🎬 Animation Summary:`);
+    console.log(`   Total: ${this.animationClips.length}`);
+    console.log(`   Idle: ${this.idleAnimations.length}`);
+    console.log(`   Thinking: ${this.thinkingAnimations.length}`);
+    console.log(`   Talking: ${this.talkingAnimations.length}`);
+  }
+
+  playRandomAnimation(state: AnimationState, loop: boolean = true) {
+    if (!this.mixer) {
+      console.warn('⚠️ No animation mixer available');
+      return;
+    }
+
+    if (!this.isLoaded) {
+      console.log('⏳ Animations still loading...');
+      return;
+    }
+
+    let availableAnimations: AnimationClip[] = [];
+    
+    switch (state) {
+      case 'idle':
+        availableAnimations = this.idleAnimations;
+        break;
+      case 'thinking':
+        availableAnimations = this.thinkingAnimations.length > 0 
+          ? this.thinkingAnimations 
+          : this.idleAnimations;
+        break;
+      case 'talking':
+        availableAnimations = this.talkingAnimations.length > 0 
+          ? this.talkingAnimations 
+          : this.idleAnimations;
+        break;
+    }
+
+    if (availableAnimations.length === 0) {
+      console.log(`⚠️ No animations for state: ${state}`);
+      return;
+    }
+
+    const randomAnim = availableAnimations[Math.floor(Math.random() * availableAnimations.length)];
+
+    // 🎯 INSTANT SWITCH - Quick 0.3s crossfade ONLY at transition
+    if (this.currentAction) {
+      const newAction = this.mixer.clipAction(randomAnim.clip);
+      
+      // Quick crossfade at transition moment
+      this.currentAction.crossFadeTo(newAction, this.crossFadeDuration, true);
+      
+      newAction.reset();
+      newAction.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+      newAction.clampWhenFinished = false;
+      newAction.enabled = true;
+      newAction.setEffectiveTimeScale(1);
+      newAction.setEffectiveWeight(1);
+      newAction.play();
+      
+      this.currentAction = newAction;
+      
+      console.log(`🎭 Switching to ${state}: "${randomAnim.name}" (${this.crossFadeDuration}s blend)`);
+    } else {
+      // First animation - start immediately
+      const action = this.mixer.clipAction(randomAnim.clip);
+      action.reset();
+      action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+      action.clampWhenFinished = false;
+      action.play();
+      
+      this.currentAction = action;
+      console.log(`🎭 Starting ${state}: "${randomAnim.name}"`);
+    }
+  }
+
+  playAnimation(name: string, loop: boolean = true) {
+    if (!this.mixer) return;
+
+    const animData = this.animationClips.find(a => a.name === name);
+    if (!animData) {
+      console.warn(`⚠️ Animation not found: ${name}`);
+      return;
+    }
+
+    if (this.currentAction) {
+      const newAction = this.mixer.clipAction(animData.clip);
+      this.currentAction.crossFadeTo(newAction, this.crossFadeDuration, true);
+      
+      newAction.reset();
+      newAction.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+      newAction.clampWhenFinished = false;
+      newAction.enabled = true;
+      newAction.setEffectiveTimeScale(1);
+      newAction.setEffectiveWeight(1);
+      newAction.play();
+      
+      this.currentAction = newAction;
+    } else {
+      const action = this.mixer.clipAction(animData.clip);
+      action.reset();
+      action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+      action.clampWhenFinished = false;
+      action.play();
+      
+      this.currentAction = action;
+    }
+    
+    console.log(`🎭 Playing: "${name}"`);
+  }
+
+  stopAnimation() {
+    if (this.currentAction) {
+      this.currentAction.fadeOut(this.crossFadeDuration);
+      setTimeout(() => {
+        if (this.currentAction) {
+          this.currentAction.stop();
+          this.currentAction = null;
+        }
+      }, this.crossFadeDuration * 1000);
+    }
+  }
+
   update() {
     if (this.mixer) {
       const delta = this.clock.getDelta();
@@ -163,93 +323,15 @@ export class BodyAnimationLoaderService {
     }
   }
 
-  /**
-   * Stop current animation
-   */
-  stop() {
-    if (this.currentAction) {
-      this.currentAction.fadeOut(0.5);
-      this.currentAction = null;
-    }
+  getAvailableAnimations(): string[] {
+    return this.animationClips.map(a => a.name);
   }
 
-  /**
-   * Procedural fallback animation if files not available
-   */
-  private playProceduralAnimation(state: BodyAnimationState) {
-    console.log('🔄 Using procedural animation for', state);
-    
-    // Create simple keyframe animation
-    const clip = this.createProceduralClip(state);
-    if (clip) {
-      this.playAnimation(clip, true);
-    }
+  hasAnimations(): boolean {
+    return this.animationClips.length > 0;
   }
 
-  /**
-   * Create simple procedural animation clip
-   */
-  private createProceduralClip(state: BodyAnimationState): THREE.AnimationClip | null {
-    if (!this.avatarModel) return null;
-
-    // Find spine bone
-    const spine = this.avatarModel.getObjectByName('Spine') ||
-                  this.avatarModel.getObjectByName('mixamorigSpine');
-    
-    if (!spine) return null;
-
-    const times = [0, 1, 2];
-    let values: number[] = [];
-
-    switch (state) {
-      case 'idle':
-        // Subtle breathing
-        values = [
-          0, 0, 0, 1,  // Frame 0: neutral quaternion
-          0.02, 0, 0, 0.9998,  // Frame 1: slight forward
-          0, 0, 0, 1   // Frame 2: back to neutral
-        ];
-        break;
-
-      case 'thinking':
-        // Head tilt
-        values = [
-          0, 0, 0, 1,
-          0, 0, 0.1, 0.995,
-          0, 0, 0, 1
-        ];
-        break;
-
-      case 'talking':
-        // Slight movement
-        values = [
-          0, 0, 0, 1,
-          0, 0.05, 0, 0.999,
-          0, 0, 0, 1
-        ];
-        break;
-    }
-
-    const track = new THREE.QuaternionKeyframeTrack(
-      spine.name + '.quaternion',
-      times,
-      values
-    );
-
-    return new THREE.AnimationClip('procedural_' + state, 2, [track]);
-  }
-
-  /**
-   * Clear animation cache
-   */
-  clearCache() {
-    this.animationCache.clear();
-  }
-
-  /**
-   * Check if animation is currently playing
-   */
-  isPlaying(): boolean {
-    return this.currentAction !== null && this.currentAction.isRunning();
+  isReady(): boolean {
+    return this.isLoaded;
   }
 }
