@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { BackendService, BackendResponse } from '../services/backend.service';
 import { AudioPlaybackService } from '../services/audio-playback.service';
 import { AvatarAnimationService } from '../services/avatar-animation.service';
+import { AmbientAudioService } from '../services/ambient-audio.service'
 
 interface Message {
   id: number;
@@ -64,7 +65,8 @@ export class ChatInterfaceComponent implements AfterViewChecked {
     private backendService: BackendService,
     private audioService: AudioPlaybackService,
     private animationService: AvatarAnimationService,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private ambientAudioService: AmbientAudioService
   ) {}
 
   ngAfterViewChecked() {
