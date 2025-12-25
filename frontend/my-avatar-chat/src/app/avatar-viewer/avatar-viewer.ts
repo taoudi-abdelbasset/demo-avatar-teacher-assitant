@@ -1,3 +1,6 @@
+// 🔧 UPDATED: src/app/avatar-viewer/avatar-viewer.ts
+// Initializes both body and face animation services
+
 import { Component, OnInit, OnDestroy, PLATFORM_ID, Inject } from '@angular/core';
 import { CommonModule, isPlatformBrowser } from '@angular/common';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
@@ -6,6 +9,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { AvatarAnimationService } from '../services/avatar-animation.service';
+import { FaceAnimationService } from '../services/face-animation.service';
 import { filter, take } from 'rxjs/operators';
 
 @Component({
@@ -51,7 +55,8 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
   constructor(
     private sanitizer: DomSanitizer,
     @Inject(PLATFORM_ID) platformId: Object,
-    private animationService: AvatarAnimationService
+    private bodyAnimationService: AvatarAnimationService,
+    private faceAnimationService: FaceAnimationService
   ) {
     this.isBrowser = isPlatformBrowser(platformId);
     this.avatarCreatorUrl = this.sanitizer.bypassSecurityTrustResourceUrl(
@@ -188,14 +193,15 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
   private animate = () => {
     requestAnimationFrame(this.animate);
     
-    // Update animations FIRST
-    this.animationService.updateBodyAnimations();
+    // 🎬 Update BODY animations FIRST
+    this.bodyAnimationService.updateBodyAnimations();
     
-    // THEN apply head tracking (so it works on top of animations)
+    // 👀 THEN apply head tracking (works on top of body animations)
     if (this.enableHeadTracking && this.headBone) {
       this.updateHeadLookAt();
     }
     
+    // 📷 Camera follow mode
     if (this.headBone && this.followHeadMode) {
       const headWorldPos = new THREE.Vector3();
       this.headBone.getWorldPosition(headWorldPos);
@@ -218,34 +224,26 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
     }
   }
 
-  // 🎯 FIXED HEAD TRACKING - Now works correctly with animations
+  // 🎯 HEAD TRACKING - Works with body animations
   private updateHeadLookAt() {
     if (!this.headBone) return;
 
-    // Get camera position in world space
     const cameraWorldPos = new THREE.Vector3();
     this.camera.getWorldPosition(cameraWorldPos);
     
-    // Get head position in world space
     const headWorldPos = new THREE.Vector3();
     this.headBone.getWorldPosition(headWorldPos);
     
-    // Calculate direction vector from head to camera
     const direction = new THREE.Vector3().subVectors(cameraWorldPos, headWorldPos);
     direction.normalize();
     
-    // Create target quaternion to look at camera
     const targetQuaternion = new THREE.Quaternion();
     const lookAtMatrix = new THREE.Matrix4();
-    
-    // Up vector (Y-axis up)
     const up = new THREE.Vector3(0, 1, 0);
     
-    // Create look-at matrix
-    lookAtMatrix.lookAt(cameraWorldPos, headWorldPos, up);  // Swap from/to → reverse direction
+    lookAtMatrix.lookAt(cameraWorldPos, headWorldPos, up);
     targetQuaternion.setFromRotationMatrix(lookAtMatrix);
     
-    // Convert to local space of head bone
     if (this.headBone.parent) {
       const parentWorldQuat = new THREE.Quaternion();
       this.headBone.parent.getWorldQuaternion(parentWorldQuat);
@@ -253,19 +251,16 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
       targetQuaternion.premultiply(parentWorldQuat);
     }
     
-    // Apply rotation with limits
     const euler = new THREE.Euler().setFromQuaternion(targetQuaternion, 'XYZ');
     
-    // Limit rotation angles (in radians)
-    const maxYaw = Math.PI / 3;   // 60° left/right
-    const maxPitch = Math.PI / 4; // 45° up/down
+    const maxYaw = Math.PI / 3;
+    const maxPitch = Math.PI / 4;
     
     euler.y = THREE.MathUtils.clamp(euler.y, -maxYaw, maxYaw);
     euler.x = THREE.MathUtils.clamp(euler.x, -maxPitch, maxPitch);
-    euler.z = 0; // Don't tilt head sideways
+    euler.z = 0;
     
-    // Smooth interpolation (lerp between current and target)
-    const smoothFactor = 0.05; // Lower = smoother
+    const smoothFactor = 0.05;
     
     this.headBone.rotation.x = THREE.MathUtils.lerp(
       this.headBone.rotation.x,
@@ -285,7 +280,6 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
       smoothFactor
     );
     
-    // Neck follows head slightly (30% of head movement)
     if (this.neckBone) {
       this.neckBone.rotation.x = THREE.MathUtils.lerp(
         this.neckBone.rotation.x,
@@ -354,6 +348,7 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
           this.loadingStatus = 'Processing model...';
           this.loadingProgress = 90;
 
+          // Clear scene
           const objectsToRemove: THREE.Object3D[] = [];
           this.scene.children.forEach((child) => {
             if (!(child instanceof THREE.Light) && 
@@ -368,6 +363,7 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
           this.scene.add(gltf.scene);
           this.avatarRoot = gltf.scene;
           
+          // Center avatar
           const box = new THREE.Box3().setFromObject(gltf.scene);
           const center = box.getCenter(new THREE.Vector3());
           const size = box.getSize(new THREE.Vector3());
@@ -377,14 +373,16 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
           
           console.log(`📏 Avatar size: ${size.y.toFixed(2)}m tall`);
 
+          // 😊 Find FACE meshes with morph targets
           const morphMeshes: any[] = [];
           gltf.scene.traverse((node: any) => {
             if (node.morphTargetDictionary && node.morphTargetInfluences) {
               morphMeshes.push(node);
             }
           });
+          console.log('😊 Found', morphMeshes.length, 'face meshes');
 
-          // Find bones for head tracking
+          // 🎯 Find bones for head tracking
           this.headBone = null;
           this.neckBone = null;
           this.spineBone = null;
@@ -409,32 +407,34 @@ export class AvatarViewerComponent implements OnInit, OnDestroy {
             }
           });
 
-          if (gltf.animations && gltf.animations.length > 0) {
-            console.log('🎬 Built-in animations found:', gltf.animations.length);
-          }
+          // 🎬 Initialize with BOTH face meshes AND body data
+          this.bodyAnimationService.setAvatarData(morphMeshes, gltf.scene, gltf.animations);
+          console.log('🎬 Body animation service initialized');
 
-          this.animationService.setAvatarData(morphMeshes, gltf.scene, gltf.animations);
+          // 😊 Initialize FACE animation service
+          this.faceAnimationService.setMorphTargetMeshes(morphMeshes);
+          console.log('😊 Face animation service initialized');
 
           this.loadingProgress = 100;
           this.loadingStatus = 'Complete!';
 
-          // ✅ Wait for animations to load, THEN start idle
-          const readySub = this.animationService.ready$
-          .pipe(
-            filter((ready: boolean) => ready === true),
-            take(1) // Only take the first true value
-          )
-          .subscribe(() => {
-            console.log('🎬 Animations ready → Starting idle animation');
-            this.animationService.setAvatarState('idle');
-            
-            // Hide loading screen after animations are ready
-            setTimeout(() => {
-              this.isLoading = false;
-              console.log('✅ Avatar fully loaded with animations');
-              console.log('👀 Head tracking is:', this.enableHeadTracking ? 'ENABLED' : 'DISABLED');
-            }, 200);
-          });
+          // ✅ Wait for body animations to load, THEN start idle
+          const readySub = this.bodyAnimationService.ready$
+            .pipe(
+              filter((ready: boolean) => ready === true),
+              take(1)
+            )
+            .subscribe(() => {
+              console.log('🎬 Body animations ready → Starting idle');
+              this.bodyAnimationService.setAvatarState('idle');
+              
+              // Hide loading screen
+              setTimeout(() => {
+                this.isLoading = false;
+                console.log('✅ Avatar fully loaded');
+                console.log('👀 Head tracking:', this.enableHeadTracking ? 'ENABLED' : 'DISABLED');
+              }, 200);
+            });
 
           resolve(true);
         },

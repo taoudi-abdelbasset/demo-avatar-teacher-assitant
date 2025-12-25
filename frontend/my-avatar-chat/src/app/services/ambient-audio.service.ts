@@ -1,13 +1,17 @@
+// 🔧 FIXED: Ambient audio that plays face animation without changing body state
+
 import { Injectable, OnDestroy } from '@angular/core';
 import { AudioPlaybackService } from './audio-playback.service';
-import { AvatarAnimationService, AvatarState } from './avatar-animation.service';
+import { FaceAnimationService } from './face-animation.service';
+import { AvatarAnimationService } from './avatar-animation.service';
 import { BackendService } from './backend.service';
-import { BodyAnimationLoaderService } from './body-animation-loader.service';
+
+type AvatarState = 'idle' | 'thinking' | 'talking';
 
 interface AmbientClip {
   audioPath: string;
   csvPath: string;
-  state: AvatarState;
+  forState: AvatarState;
   chance: number;
 }
 
@@ -16,84 +20,89 @@ interface AmbientClip {
 })
 export class AmbientAudioService implements OnDestroy {
   private isPlaying = false;
-  private currentState: AvatarState = 'idle';
-  private enabled = true; // ✅ Enabled by default
+  private currentBodyState: AvatarState = 'idle';
+  private enabled = true;
   private intervalId: any = null;
   
   private ambientClips: AmbientClip[] = [
-    // Idle clips
+    // 🧘 IDLE body state + idle voice clips
     {
       audioPath: '/assets/ambient-audio/idle/hello.wav',
       csvPath: '/assets/ambient-audio/idle/hello.csv',
-      state: 'idle',
-      chance: 0.3
+      forState: 'idle',
+      chance: 0.6
     },
     {
       audioPath: '/assets/ambient-audio/idle/still_waiting.wav',
       csvPath: '/assets/ambient-audio/idle/still_waiting.csv',
-      state: 'idle',
+      forState: 'idle',
       chance: 0.7
     },
     {
       audioPath: '/assets/ambient-audio/idle/here_to_help.wav',
       csvPath: '/assets/ambient-audio/idle/here_to_help.csv',
-      state: 'idle',
+      forState: 'idle',
       chance: 0.95
     },
     
-    // Thinking clips
+    // 🤔 THINKING body state + thinking voice clips
     {
       audioPath: '/assets/ambient-audio/thinking/let_me_think.wav',
       csvPath: '/assets/ambient-audio/thinking/let_me_think.csv',
-      state: 'thinking',
-      chance: 0.3
+      forState: 'thinking',
+      chance: 0.8
     }
   ];
 
   constructor(
     private audioPlayback: AudioPlaybackService,
-    private animationService: AvatarAnimationService,
-    private backend: BackendService,
-    private bodyAnimationLoader: BodyAnimationLoaderService
+    private faceAnimationService: FaceAnimationService,
+    private avatarAnimationService: AvatarAnimationService,
+    private backend: BackendService
   ) {
     console.log('🎵 Ambient Audio Service initialized');
-    
-    // Listen to avatar state changes
-    this.animationService.avatarState$.subscribe(state => {
-      this.currentState = state;
-      this.handleStateChange(state);
-    });
+    this.initializeListeners();
+  }
 
-    // Listen to body animation changes
-    this.bodyAnimationLoader.animationChanged$.subscribe(state => {
-      if (state === 'idle' || state === 'thinking') {
-        this.tryPlayAmbient();
-      }
+  private initializeListeners() {
+    // Listen to BODY state changes from orchestrator
+    this.avatarAnimationService.avatarState$.subscribe((state: AvatarState) => {
+      this.currentBodyState = state;
+      this.handleBodyStateChange(state);
     });
 
     // Start periodic checks
     this.startPeriodicCheck();
+    
+    console.log('✅ Ambient audio listeners initialized');
   }
 
   ngOnDestroy() {
     this.stopPeriodicCheck();
   }
 
-  private handleStateChange(state: AvatarState) {
-    console.log('🎭 Ambient audio sees state change:', state);
+  /**
+   * Handle body animation state changes
+   * Manage timer based on body state
+   */
+  private handleBodyStateChange(state: AvatarState) {
+    console.log('🎭 Ambient audio sees body state:', state);
     
-    // Stop timer when talking
+    // Stop timer when body is in "talking" state
     if (state === 'talking') {
       this.stopPeriodicCheck();
-    } else if (state === 'idle' || state === 'thinking') {
-      // Restart timer when returning to idle/thinking
+    } 
+    // Start timer when body is idle/thinking
+    else if (state === 'idle' || state === 'thinking') {
       this.startPeriodicCheck();
     }
   }
 
+  /**
+   * Start periodic ambient audio checks
+   */
   private startPeriodicCheck() {
     if (this.intervalId) {
-      console.log('⏭️ Timer already running, skipping');
       return;
     }
     
@@ -102,82 +111,103 @@ export class AmbientAudioService implements OnDestroy {
     const checkInterval = () => {
       this.tryPlayAmbient();
       
-      // ✅ FIXED: Random interval (8-12 seconds)
-      const nextInterval = 3000 + Math.random() * 4000; // 8000-12000ms = 8-12 seconds
-      console.log(`⏰ Next ambient check in ${(nextInterval / 1000).toFixed(1)}s`);
+      // Random interval (8-12 seconds)
+      const nextInterval = 8000 + Math.random() * 4000;
+      console.log(`⏰ Next check in ${(nextInterval / 1000).toFixed(1)}s`);
       this.intervalId = setTimeout(checkInterval, nextInterval);
     };
     
-    // Start first check after 8-12 seconds
-    const firstInterval = 3000 + Math.random() * 4000;
-    console.log(`⏰ First ambient check in ${(firstInterval / 1000).toFixed(1)}s`);
+    // First check after 8-12 seconds
+    const firstInterval = 8000 + Math.random() * 4000;
+    console.log(`⏰ First check in ${(firstInterval / 1000).toFixed(1)}s`);
     this.intervalId = setTimeout(checkInterval, firstInterval);
   }
 
+  /**
+   * Stop periodic checks
+   */
   private stopPeriodicCheck() {
     if (this.intervalId) {
       clearTimeout(this.intervalId);
       this.intervalId = null;
-      console.log('🔇 Stopped periodic ambient audio checks');
+      console.log('🔇 Stopped periodic checks');
     }
   }
 
+  /**
+   * Try to play ambient audio
+   * 🎯 KEY: Plays FACE animation WITHOUT changing body animation!
+   */
   private async tryPlayAmbient() {
-    console.log('🎲 Trying to play ambient audio...');
+    console.log('🎲 Trying ambient audio...');
     console.log('   - Enabled:', this.enabled);
-    console.log('   - Is playing:', this.isPlaying);
-    console.log('   - Audio service playing:', this.audioPlayback.isPlaying());
-    console.log('   - Current state:', this.currentState);
+    console.log('   - Playing:', this.isPlaying);
+    console.log('   - Body state:', this.currentBodyState);
     
     // Check if enabled
     if (!this.enabled) {
-      console.log('🎲 Skipped: Service disabled');
+      console.log('   ❌ Service disabled');
       return;
     }
 
-    // Don't interrupt if already playing audio
-    if (this.isPlaying || this.audioPlayback.isPlaying()) {
-      console.log('🎲 Skipped: Already playing audio');
+    // Don't interrupt if already playing
+    if (this.audioPlayback.isPlaying()) {
+      console.log('   ❌ Audio service is playing');
       return;
     }
 
-    // Only play during idle/thinking
-    if (this.currentState !== 'idle' && this.currentState !== 'thinking') {
-      console.log('🎲 Skipped: Not in idle/thinking state');
+    // 🔧 SAFETY: Reset stuck flag if audio service says nothing is playing
+    if (this.isPlaying && !this.audioPlayback.isPlaying()) {
+      console.warn('   ⚠️ Flag was stuck! Resetting...');
+      this.isPlaying = false;
+    }
+
+    if (this.isPlaying) {
+      console.log('   ❌ Ambient playback in progress');
       return;
     }
 
-    // Get clips for current state
+    // Only play during idle/thinking body states
+    if (this.currentBodyState !== 'idle' && this.currentBodyState !== 'thinking') {
+      console.log('   ❌ Body not idle/thinking');
+      return;
+    }
+
+    // Get clips matching current body state
     const availableClips = this.ambientClips.filter(
-      clip => clip.state === this.currentState
+      clip => clip.forState === this.currentBodyState
     );
 
     if (availableClips.length === 0) {
-      console.log('🎲 No ambient clips for state:', this.currentState);
+      console.log('   ❌ No clips for:', this.currentBodyState);
       return;
     }
 
-    // Pick a random clip
+    // Pick random clip
     const randomClip = availableClips[Math.floor(Math.random() * availableClips.length)];
 
-    // Roll the dice
+    // Roll probability
     const roll = Math.random();
-    console.log(`🎲 Rolled ${(roll * 100).toFixed(0)}% vs ${(randomClip.chance * 100).toFixed(0)}% chance`);
+    console.log(`   🎲 ${(roll * 100).toFixed(0)}% vs ${(randomClip.chance * 100).toFixed(0)}%`);
     
     if (roll > randomClip.chance) {
-      console.log(`🎲 Skipped: Failed probability check`);
+      console.log('   ❌ Failed probability');
       return;
     }
 
-    console.log(`🎵 ✅ Playing ambient: ${randomClip.audioPath}`);
+    console.log(`   ✅ Playing: ${randomClip.audioPath}`);
     await this.playAmbientClip(randomClip);
   }
 
+  /**
+   * Play ambient clip
+   * 🎯 ONLY animates FACE - body animation continues unchanged!
+   */
   private async playAmbientClip(clip: AmbientClip) {
     try {
       this.isPlaying = true;
 
-      // Load CSV data
+      // Load CSV
       const csvResponse = await fetch(clip.csvPath);
       if (!csvResponse.ok) {
         throw new Error(`CSV not found: ${clip.csvPath}`);
@@ -185,42 +215,36 @@ export class AmbientAudioService implements OnDestroy {
       const csvText = await csvResponse.text();
       const csvData = this.backend.parseCSV(csvText);
 
-      // Check if audio file exists
+      // Check audio exists
       const audioResponse = await fetch(clip.audioPath, { method: 'HEAD' });
       if (!audioResponse.ok) {
         throw new Error(`Audio not found: ${clip.audioPath}`);
       }
 
-      // Start audio and lip-sync
-      const audioStartTime = performance.now() / 1000;
-      
-      // Start lip-sync
-      this.animationService.startLipSync(csvData, audioStartTime);
-      console.log('🎤 Ambient lip-sync started');
+      // 🎯 Start FACE lip-sync ONLY (body animation unchanged!)
+      this.faceAnimationService.startLipSync(csvData);
+      console.log('🎤 Face lip-sync started (body: ' + this.currentBodyState + ')');
 
       // Play audio
       await this.audioPlayback.playAudio(clip.audioPath);
       console.log('✅ Ambient audio finished');
 
-      // Stop lip-sync when done
-      this.animationService.stopLipSync();
+      // Stop FACE lip-sync
+      this.faceAnimationService.stopLipSync();
 
     } catch (error) {
-      console.warn('⚠️ Failed to play ambient audio:', error);
-      console.warn('📁 Check if files exist:');
-      console.warn('   Audio:', clip.audioPath);
-      console.warn('   CSV:', clip.csvPath);
+      console.warn('⚠️ Ambient audio failed:', error);
     } finally {
       this.isPlaying = false;
     }
   }
 
   /**
-   * Manually trigger an ambient clip (for testing)
+   * Manual trigger (for testing)
    */
   async playSpecificClip(audioPath: string, csvPath: string) {
     if (this.isPlaying) {
-      console.log('⚠️ Already playing, skipping manual trigger');
+      console.log('⚠️ Already playing');
       return;
     }
 
@@ -228,17 +252,17 @@ export class AmbientAudioService implements OnDestroy {
     await this.playAmbientClip({
       audioPath,
       csvPath,
-      state: this.currentState,
+      forState: this.currentBodyState,
       chance: 1.0
     });
   }
 
   /**
-   * Enable/disable ambient audio
+   * Enable/disable
    */
   setEnabled(enabled: boolean) {
     this.enabled = enabled;
-    console.log(enabled ? '🎵 Ambient audio ENABLED' : '🔇 Ambient audio DISABLED');
+    console.log(enabled ? '🎵 ENABLED' : '🔇 DISABLED');
     
     if (enabled) {
       this.startPeriodicCheck();
@@ -248,7 +272,7 @@ export class AmbientAudioService implements OnDestroy {
   }
 
   /**
-   * Check if ambient audio is enabled
+   * Check if enabled
    */
   isEnabled(): boolean {
     return this.enabled;

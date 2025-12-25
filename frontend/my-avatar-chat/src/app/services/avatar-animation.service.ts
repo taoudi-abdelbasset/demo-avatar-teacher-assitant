@@ -1,7 +1,10 @@
+// 🎯 NEW ARCHITECTURE: Avatar Animation Orchestrator
+// Manages BODY state and coordinates both services
+
 import { Injectable } from '@angular/core';
-import { BehaviorSubject, Subscription, Observable } from 'rxjs';
+import { BehaviorSubject, Observable } from 'rxjs';
 import { BodyAnimationLoaderService } from './body-animation-loader.service';
-import { AudioPlaybackService } from './audio-playback.service';
+import { FaceAnimationService } from './face-animation.service';
 
 export type AvatarState = 'idle' | 'thinking' | 'talking';
 
@@ -9,182 +12,102 @@ export type AvatarState = 'idle' | 'thinking' | 'talking';
   providedIn: 'root'
 })
 export class AvatarAnimationService {
-  private morphTargetMeshes: any[] = [];
   private avatarModel: any = null;
-  private animationFrameId: number | null = null;
-  private lipSyncData: any[] = [];
-  private lipSyncStartTime: number = 0;
-  private builtInAnimations: any[] = [];
-
+  
+  // 🎭 Body state (what body animation is playing)
   private avatarStateSubject = new BehaviorSubject<AvatarState>('idle');
   avatarState$ = this.avatarStateSubject.asObservable();
 
   private avatarLoadedSubject = new BehaviorSubject<boolean>(false);
   avatarLoaded$ = this.avatarLoadedSubject.asObservable();
 
-  private pendingState: AvatarState | null = null;
-  private readySub: Subscription | null = null;
-
   constructor(
     private bodyAnimationLoader: BodyAnimationLoaderService,
-    private audioPlayback: AudioPlaybackService
-  ) {}
-
-  // ✅ Expose body animation loader ready state as a getter
-  get ready$(): Observable<boolean> {
-    return this.bodyAnimationLoader.ready$;
+    private faceAnimationService: FaceAnimationService
+  ) {
+    console.log('🎭 Avatar Animation Orchestrator initialized');
   }
 
+  /**
+   * Set avatar data - distribute to both services
+   */
   setAvatarData(meshes: any[], model: any, animations?: any[]) {
-    this.morphTargetMeshes = meshes;
     this.avatarModel = model;
-    this.builtInAnimations = animations || [];
-    this.avatarLoadedSubject.next(true);
     
+    // Give face meshes to FaceAnimationService
+    this.faceAnimationService.setMorphTargetMeshes(meshes);
+    
+    // Give body model to BodyAnimationLoaderService
     this.bodyAnimationLoader.setAvatarModel(model, animations);
     
-    console.log('✅ Avatar data set:', meshes.length, 'meshes');
-    if (this.builtInAnimations.length > 0) {
-      console.log('🎬 Built-in animations:', this.builtInAnimations.length);
-    }
+    this.avatarLoadedSubject.next(true);
+    
+    console.log('✅ Avatar data distributed:');
+    console.log('   - Face meshes:', meshes.length);
+    console.log('   - Body model:', model ? '✓' : '✗');
+    console.log('   - Animations:', animations?.length || 0);
   }
 
+  /**
+   * 🎭 Change BODY animation state (idle/thinking/talking)
+   */
   setAvatarState(state: AvatarState) {
     const previousState = this.avatarStateSubject.value;
     
-    // Don't change if already in this state
     if (previousState === state) {
-      return;
+      return; // Already in this state
     }
     
     this.avatarStateSubject.next(state);
-    console.log(`🎭 Avatar: ${previousState} → ${state}`);
+    console.log(`🎭 Body state: ${previousState} → ${state}`);
     
+    // Change body animation
     if (this.bodyAnimationLoader.isReady()) {
       this.bodyAnimationLoader.playRandomAnimation(state, true);
     } else {
-      this.pendingState = state;
-      
-      if (this.readySub) {
-        this.readySub.unsubscribe();
-      }
-      
-      this.readySub = this.bodyAnimationLoader.ready$.subscribe(ready => {
-        if (ready && this.pendingState) {
-          this.bodyAnimationLoader.playRandomAnimation(this.pendingState, true);
-          this.pendingState = null;
+      console.log('⏳ Waiting for body animations to load...');
+      setTimeout(() => {
+        if (this.bodyAnimationLoader.isReady()) {
+          this.bodyAnimationLoader.playRandomAnimation(state, true);
         }
-        if (this.readySub) {
-          this.readySub.unsubscribe();
-          this.readySub = null;
-        }
-      });
+      }, 1000);
     }
   }
 
+  /**
+   * 🎤 Start lip-sync (FACE only - doesn't change body state!)
+   */
+  startLipSync(csvData: any[]) {
+    // Only face animation changes
+    this.faceAnimationService.startLipSync(csvData);
+    console.log('🎤 Lip-sync started (body animation unchanged)');
+  }
+
+  /**
+   * 🛑 Stop lip-sync (FACE only)
+   */
+  stopLipSync() {
+    this.faceAnimationService.stopLipSync();
+    console.log('🛑 Lip-sync stopped');
+  }
+
+  /**
+   * Update body animations (call every frame)
+   */
   updateBodyAnimations() {
     this.bodyAnimationLoader.update();
   }
 
-  startLipSync(csvData: any[], audioStartTime: number) {
-    this.stopLipSync();
-    this.lipSyncData = csvData;
-    this.lipSyncStartTime = audioStartTime;
-    this.setAvatarState('talking');
-    console.log('🎤 Starting lip-sync with', csvData.length, 'frames');
-    this.animateLipSync();
-  }
-
-  stopLipSync() {
-    if (this.animationFrameId) {
-      cancelAnimationFrame(this.animationFrameId);
-      this.animationFrameId = null;
-    }
-    this.resetFace();
-    console.log('🛑 Lip-sync stopped');
-  }
-
-  private animateLipSync = () => {
-    if (!this.lipSyncData.length) {
-      console.warn('⚠️ No lip-sync data available');
-      return;
-    }
-
-    // Use audio's actual current time for perfect sync
-    const currentTime = this.audioPlayback.getCurrentTime();
-    
-    // Find closest frame (30fps = 0.033s tolerance)
-    const frame = this.lipSyncData.find(f => 
-      Math.abs(f.timeCode - currentTime) < 0.033
-    );
-
-    if (frame) {
-      this.applyCSVBlendshapes(frame);
-    }
-
-    this.animationFrameId = requestAnimationFrame(this.animateLipSync);
-  }
-
-  private applyCSVBlendshapes(frame: any) {
-    if (this.morphTargetMeshes.length === 0) return;
-
-    this.morphTargetMeshes.forEach(mesh => {
-      const dict = mesh.morphTargetDictionary;
-      if (!dict) return;
-
-      Object.keys(frame).forEach(csvKey => {
-        if (!csvKey.startsWith('blendShapes.')) return;
-        
-        const morphKey = csvKey.replace('blendShapes.', '');
-        const morphKeyLowerFirst = morphKey.charAt(0).toLowerCase() + morphKey.slice(1);
-        
-        const dictIndex = dict[morphKeyLowerFirst];
-        if (dictIndex !== undefined) {
-          mesh.morphTargetInfluences[dictIndex] = frame[csvKey];
-        } else {
-          const dictIndexAlt = dict[morphKey];
-          if (dictIndexAlt !== undefined) {
-            mesh.morphTargetInfluences[dictIndexAlt] = frame[csvKey];
-          }
-        }
-      });
-    });
-  }
-
+  /**
+   * Manual face blendshapes (for testing/controls)
+   */
   applyFaceBlendshapes(params: any) {
-    if (this.morphTargetMeshes.length === 0) {
-      console.warn('⚠️ No morph target meshes available');
-      return;
-    }
-
-    this.morphTargetMeshes.forEach(mesh => {
-      const dict = mesh.morphTargetDictionary;
-      if (!dict) return;
-
-      const mappings: any = {
-        eyeBlink: ['eyeBlinkLeft', 'eyeBlinkRight'],
-        eyeWide: ['eyeWideLeft', 'eyeWideRight'],
-        eyeSquint: ['eyeSquintLeft', 'eyeSquintRight'],
-        smile: ['mouthSmileLeft', 'mouthSmileRight'],
-        jawOpen: ['jawOpen'],
-        mouthFrown: ['mouthFrownLeft', 'mouthFrownRight'],
-        browUp: ['browInnerUp', 'browOuterUpLeft', 'browOuterUpRight'],
-        browDown: ['browDownLeft', 'browDownRight']
-      };
-
-      Object.entries(params).forEach(([paramName, value]: [string, any]) => {
-        const blendshapeNames = mappings[paramName] || [];
-        const normalizedValue = value / 100;
-
-        blendshapeNames.forEach((shapeName: string) => {
-          if (dict[shapeName] !== undefined) {
-            mesh.morphTargetInfluences[dict[shapeName]] = normalizedValue;
-          }
-        });
-      });
-    });
+    this.faceAnimationService.applyFaceBlendshapes(params);
   }
 
+  /**
+   * Manual body rotations (for testing/controls)
+   */
   applyBodyRotations(params: any) {
     if (!this.avatarModel) {
       console.warn('⚠️ No avatar model available');
@@ -211,18 +134,13 @@ export class AvatarAnimationService {
     }
   }
 
-  private resetFace() {
-    this.morphTargetMeshes.forEach(mesh => {
-      if (mesh.morphTargetInfluences) {
-        mesh.morphTargetInfluences.fill(0);
-      }
-    });
-  }
-
+  /**
+   * Reset everything
+   */
   resetAll() {
-    this.stopLipSync();
-    this.resetFace();
-
+    this.faceAnimationService.stopLipSync();
+    this.bodyAnimationLoader.stopAnimation();
+    
     if (this.avatarModel) {
       this.avatarModel.traverse((node: any) => {
         if (node.isBone) {
@@ -232,5 +150,20 @@ export class AvatarAnimationService {
     }
     
     this.setAvatarState('idle');
+    console.log('🔄 Avatar reset complete');
+  }
+
+  /**
+   * Get current body state
+   */
+  getCurrentState(): AvatarState {
+    return this.avatarStateSubject.value;
+  }
+
+  /**
+   * Check if body animations are ready
+   */
+  get ready$(): Observable<boolean> {
+    return this.bodyAnimationLoader.ready$;
   }
 }

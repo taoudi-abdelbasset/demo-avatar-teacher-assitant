@@ -220,14 +220,14 @@ export class ChatInterfaceComponent implements AfterViewChecked {
       }
       
       // Start lip-sync and set to talking
+      // 🎯 Set body to TALKING state
+      this.animationService.setAvatarState('talking');
+      console.log('🎤 Response playing → Avatar talking');
+
+      // Start lip-sync (face animation)
       if (csvData.length > 0) {
-        const audioStartTime = performance.now();
-        this.animationService.startLipSync(csvData, audioStartTime);
-        console.log('🎤 Lip-sync started → Avatar talking');
-      } else {
-        // No CSV but still has audio - just set talking state
-        this.animationService.setAvatarState('talking');
-        console.log('🎤 Audio only (no lip-sync) → Avatar talking');
+        this.animationService.startLipSync(csvData);
+        console.log('😊 Face lip-sync started');
       }
 
       // Play audio
