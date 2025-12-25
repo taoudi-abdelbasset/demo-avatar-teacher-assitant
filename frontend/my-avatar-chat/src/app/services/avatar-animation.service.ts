@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
-import { BehaviorSubject } from 'rxjs';
+import { BehaviorSubject, Subscription, Observable } from 'rxjs';
 import { BodyAnimationLoaderService } from './body-animation-loader.service';
+import { AudioPlaybackService } from './audio-playback.service';
 
 export type AvatarState = 'idle' | 'thinking' | 'talking';
 
@@ -21,7 +22,18 @@ export class AvatarAnimationService {
   private avatarLoadedSubject = new BehaviorSubject<boolean>(false);
   avatarLoaded$ = this.avatarLoadedSubject.asObservable();
 
-  constructor(private bodyAnimationLoader: BodyAnimationLoaderService) {}
+  private pendingState: AvatarState | null = null;
+  private readySub: Subscription | null = null;
+
+  constructor(
+    private bodyAnimationLoader: BodyAnimationLoaderService,
+    private audioPlayback: AudioPlaybackService
+  ) {}
+
+  // ✅ Expose body animation loader ready state as a getter
+  get ready$(): Observable<boolean> {
+    return this.bodyAnimationLoader.ready$;
+  }
 
   setAvatarData(meshes: any[], model: any, animations?: any[]) {
     this.morphTargetMeshes = meshes;
@@ -35,27 +47,38 @@ export class AvatarAnimationService {
     if (this.builtInAnimations.length > 0) {
       console.log('🎬 Built-in animations:', this.builtInAnimations.length);
     }
-    
-    // Start idle after animations load
-    setTimeout(() => {
-      this.setAvatarState('idle');
-    }, 1000);
   }
 
   setAvatarState(state: AvatarState) {
     const previousState = this.avatarStateSubject.value;
+    
+    // Don't change if already in this state
+    if (previousState === state) {
+      return;
+    }
+    
     this.avatarStateSubject.next(state);
     console.log(`🎭 Avatar: ${previousState} → ${state}`);
     
     if (this.bodyAnimationLoader.isReady()) {
       this.bodyAnimationLoader.playRandomAnimation(state, true);
     } else {
-      console.log('⏳ Waiting for animations...');
-      setTimeout(() => {
-        if (this.bodyAnimationLoader.isReady()) {
-          this.bodyAnimationLoader.playRandomAnimation(state, true);
+      this.pendingState = state;
+      
+      if (this.readySub) {
+        this.readySub.unsubscribe();
+      }
+      
+      this.readySub = this.bodyAnimationLoader.ready$.subscribe(ready => {
+        if (ready && this.pendingState) {
+          this.bodyAnimationLoader.playRandomAnimation(this.pendingState, true);
+          this.pendingState = null;
         }
-      }, 2000);
+        if (this.readySub) {
+          this.readySub.unsubscribe();
+          this.readySub = null;
+        }
+      });
     }
   }
 
@@ -87,7 +110,8 @@ export class AvatarAnimationService {
       return;
     }
 
-    const currentTime = (performance.now() - this.lipSyncStartTime) / 1000;
+    // Use audio's actual current time for perfect sync
+    const currentTime = this.audioPlayback.getCurrentTime();
     
     // Find closest frame (30fps = 0.033s tolerance)
     const frame = this.lipSyncData.find(f => 
@@ -98,15 +122,7 @@ export class AvatarAnimationService {
       this.applyCSVBlendshapes(frame);
     }
 
-    // Continue animation if we haven't reached the end
-    const lastFrameTime = this.lipSyncData[this.lipSyncData.length - 1].timeCode;
-    if (currentTime < lastFrameTime) {
-      this.animationFrameId = requestAnimationFrame(this.animateLipSync);
-    } else {
-      console.log('✅ Lip-sync animation complete');
-      this.stopLipSync();
-      this.setAvatarState('idle');
-    }
+    this.animationFrameId = requestAnimationFrame(this.animateLipSync);
   }
 
   private applyCSVBlendshapes(frame: any) {

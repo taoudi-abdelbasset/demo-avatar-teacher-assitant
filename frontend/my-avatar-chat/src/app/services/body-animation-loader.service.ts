@@ -1,4 +1,5 @@
 import { Injectable } from '@angular/core';
+import { BehaviorSubject, Subject } from 'rxjs';
 import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
@@ -27,8 +28,12 @@ export class BodyAnimationLoaderService {
   private thinkingAnimations: AnimationClip[] = [];
   private talkingAnimations: AnimationClip[] = [];
 
-  // 🎯 INSTANT SWITCH - Only 0.3s crossfade at transition moment
-  private crossFadeDuration = 0.3; // Super quick blend
+  private readySubject = new BehaviorSubject<boolean>(false);
+  ready$ = this.readySubject.asObservable();
+
+  // 🎯 NEW: Emit when a new animation starts
+  private animationChangedSubject = new Subject<AnimationState>();
+  animationChanged$ = this.animationChangedSubject.asObservable();
 
   private animationPaths = {
     idle: [
@@ -104,7 +109,10 @@ export class BodyAnimationLoaderService {
     });
 
     this.isLoaded = true;
+    console.log('✅ Built-in animations loaded!');
     this.logAnimationStats();
+    
+    this.readySubject.next(true);
   }
 
   private async loadExternalAnimations() {
@@ -133,7 +141,10 @@ export class BodyAnimationLoaderService {
     
     this.isLoaded = true;
     this.isLoading = false;
+    console.log('✅ External animations loaded!');
     this.logAnimationStats();
+    
+    this.readySubject.next(true);
   }
 
   private loadAnimation(loader: FBXLoader, path: string, state: AnimationState): Promise<void> {
@@ -238,35 +249,24 @@ export class BodyAnimationLoaderService {
 
     const randomAnim = availableAnimations[Math.floor(Math.random() * availableAnimations.length)];
 
-    // 🎯 INSTANT SWITCH - Quick 0.3s crossfade ONLY at transition
+    // Stop old animation completely
     if (this.currentAction) {
-      const newAction = this.mixer.clipAction(randomAnim.clip);
-      
-      // Quick crossfade at transition moment
-      this.currentAction.crossFadeTo(newAction, this.crossFadeDuration, true);
-      
-      newAction.reset();
-      newAction.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
-      newAction.clampWhenFinished = false;
-      newAction.enabled = true;
-      newAction.setEffectiveTimeScale(1);
-      newAction.setEffectiveWeight(1);
-      newAction.play();
-      
-      this.currentAction = newAction;
-      
-      console.log(`🎭 Switching to ${state}: "${randomAnim.name}" (${this.crossFadeDuration}s blend)`);
-    } else {
-      // First animation - start immediately
-      const action = this.mixer.clipAction(randomAnim.clip);
-      action.reset();
-      action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
-      action.clampWhenFinished = false;
-      action.play();
-      
-      this.currentAction = action;
-      console.log(`🎭 Starting ${state}: "${randomAnim.name}"`);
+      this.currentAction.stop();
+      console.log('🛑 Stopped previous animation');
     }
+
+    // Start new animation immediately
+    const newAction = this.mixer.clipAction(randomAnim.clip);
+    newAction.reset();
+    newAction.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+    newAction.clampWhenFinished = false;
+    newAction.play();
+    
+    this.currentAction = newAction;
+    console.log(`▶️ Playing ${state}: "${randomAnim.name}"`);
+
+    // 🎯 EMIT: New animation started
+    this.animationChangedSubject.next(state);
   }
 
   playAnimation(name: string, loop: boolean = true) {
@@ -278,41 +278,30 @@ export class BodyAnimationLoaderService {
       return;
     }
 
+    // Stop old
     if (this.currentAction) {
-      const newAction = this.mixer.clipAction(animData.clip);
-      this.currentAction.crossFadeTo(newAction, this.crossFadeDuration, true);
-      
-      newAction.reset();
-      newAction.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
-      newAction.clampWhenFinished = false;
-      newAction.enabled = true;
-      newAction.setEffectiveTimeScale(1);
-      newAction.setEffectiveWeight(1);
-      newAction.play();
-      
-      this.currentAction = newAction;
-    } else {
-      const action = this.mixer.clipAction(animData.clip);
-      action.reset();
-      action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
-      action.clampWhenFinished = false;
-      action.play();
-      
-      this.currentAction = action;
+      this.currentAction.stop();
     }
+
+    // Start new
+    const newAction = this.mixer.clipAction(animData.clip);
+    newAction.reset();
+    newAction.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+    newAction.clampWhenFinished = false;
+    newAction.play();
     
-    console.log(`🎭 Playing: "${name}"`);
+    this.currentAction = newAction;
+    console.log(`▶️ Playing: "${name}"`);
+
+    // 🎯 EMIT: Animation changed
+    this.animationChangedSubject.next(animData.state);
   }
 
   stopAnimation() {
     if (this.currentAction) {
-      this.currentAction.fadeOut(this.crossFadeDuration);
-      setTimeout(() => {
-        if (this.currentAction) {
-          this.currentAction.stop();
-          this.currentAction = null;
-        }
-      }, this.crossFadeDuration * 1000);
+      this.currentAction.stop();
+      this.currentAction = null;
+      console.log('🛑 Animation stopped');
     }
   }
 

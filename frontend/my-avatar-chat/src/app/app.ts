@@ -7,25 +7,22 @@ import { AvatarAnimationService } from './services/avatar-animation.service'; //
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [AvatarViewerComponent, ChatInterfaceComponent, AvatarControlsComponent],
+  imports: [AvatarViewerComponent, ChatInterfaceComponent],
   templateUrl: './app.html',
   styleUrls: ['./app.css']
 })
 export class AppComponent {
   title = 'my-avatar-chat';
 
-  // Inject the service
   constructor(private animationService: AvatarAnimationService) {}
 
   onFaceChanged(params: FaceParameters) {
     console.log('Face params changed:', params);
-    // Apply to avatar via service
     this.animationService.applyFaceBlendshapes(params);
   }
 
   onBodyChanged(params: BodyParameters) {
     console.log('Body params changed:', params);
-    // Apply to avatar via service
     this.animationService.applyBodyRotations(params);
   }
 }

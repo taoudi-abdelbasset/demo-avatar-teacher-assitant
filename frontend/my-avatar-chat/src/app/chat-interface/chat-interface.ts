@@ -1,4 +1,4 @@
-import { Component, ViewChild, ElementRef, AfterViewChecked } from '@angular/core';
+import { Component, ViewChild, ElementRef, AfterViewChecked, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { BackendService, BackendResponse } from '../services/backend.service';
@@ -58,11 +58,13 @@ export class ChatInterfaceComponent implements AfterViewChecked {
   selectedImages: string[] = [];
   private shouldScroll = false;
   isProcessing = false;
+  private currentPlaybackId: number = 0;
 
   constructor(
     private backendService: BackendService,
     private audioService: AudioPlaybackService,
-    private animationService: AvatarAnimationService
+    private animationService: AvatarAnimationService,
+    private cdr: ChangeDetectorRef
   ) {}
 
   ngAfterViewChecked() {
@@ -93,6 +95,10 @@ export class ChatInterfaceComponent implements AfterViewChecked {
     if (!this.inputMessage.trim() && this.selectedImages.length === 0) return;
     if (this.isProcessing) return;
 
+    // 🛑 STOP EVERYTHING FIRST
+    this.stopAllPlayback();
+    this.currentPlaybackId++;
+
     const userMessage: Message = {
       id: this.messages.length + 1,
       role: 'user',
@@ -117,14 +123,15 @@ export class ChatInterfaceComponent implements AfterViewChecked {
     this.shouldScroll = true;
     this.isProcessing = true;
 
-    // Set avatar to thinking state
+    // 🎯 CORRECT FLOW: idle → thinking (while waiting for response)
+    await new Promise(resolve => setTimeout(resolve, 100));
     this.animationService.setAvatarState('thinking');
+    console.log('💭 User sent message → Avatar thinking...');
 
     try {
-      // Call backend
+      // Call backend (takes 4-10 seconds with "thinking" animation)
       const response = await this.backendService.sendMessage(messageText, messageImages);
       
-      // Create AI message with response data
       const aiMessage: Message = {
         id: this.messages.length + 1,
         role: 'assistant',
@@ -141,10 +148,14 @@ export class ChatInterfaceComponent implements AfterViewChecked {
         conv.timestamp = new Date();
       }
       
+      // Set isProcessing to false IMMEDIATELY
+      this.isProcessing = false;
+      this.cdr.detectChanges();
       this.shouldScroll = true;
 
-      // Auto-play the response
-      await this.playMessageAudio(aiMessage);
+      // 🎯 CORRECT FLOW: thinking → talking (when audio plays)
+      const playbackId = this.currentPlaybackId;
+      this.playMessageAudio(aiMessage, playbackId, false); // false = NOT a replay
 
     } catch (error) {
       console.error('Error sending message:', error);
@@ -157,55 +168,109 @@ export class ChatInterfaceComponent implements AfterViewChecked {
       };
       
       this.messages.push(errorMessage);
-      this.shouldScroll = true;
-    } finally {
       this.isProcessing = false;
+      this.cdr.detectChanges();
+      this.shouldScroll = true;
+      
+      // 🎯 Error → back to idle
       this.animationService.setAvatarState('idle');
+      console.log('❌ Error → Avatar idle');
     }
   }
 
   /**
-   * Play audio and lip-sync animation for a message
+   * Play audio and lip-sync animation
+   * @param isReplay - true when user clicks replay button, false for new messages
    */
-  async playMessageAudio(message: Message) {
+  async playMessageAudio(message: Message, playbackId?: number, isReplay: boolean = false) {
     if (!message.audioUrl) return;
 
-    // Stop any current playback
-    this.audioService.stop();
-    this.animationService.stopLipSync();
+    // Check if cancelled
+    if (playbackId !== undefined && playbackId !== this.currentPlaybackId) {
+      console.log('⚠️ Playback cancelled - newer message sent');
+      return;
+    }
 
-    // Mark message as playing
+    // 🛑 STOP EVERYTHING
+    this.stopAllPlayback();
     message.isPlaying = true;
 
     try {
-      // Parse CSV data if available
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Check again after delay
+      if (playbackId !== undefined && playbackId !== this.currentPlaybackId) {
+        console.log('⚠️ Playback cancelled during delay');
+        message.isPlaying = false;
+        return;
+      }
+
+      // Parse CSV data
       let csvData: any[] = [];
       if (message.csvData) {
         csvData = this.backendService.parseCSV(message.csvData);
       }
 
-      // Start lip-sync animation
+      // 🎯 CORRECT FLOW for REPLAY: idle → talking (skip thinking)
+      if (isReplay) {
+        console.log('🔁 Replay → Avatar talking directly (no thinking)');
+        // Don't set thinking state for replays
+      }
+      
+      // Start lip-sync and set to talking
       if (csvData.length > 0) {
         const audioStartTime = performance.now();
         this.animationService.startLipSync(csvData, audioStartTime);
+        console.log('🎤 Lip-sync started → Avatar talking');
+      } else {
+        // No CSV but still has audio - just set talking state
+        this.animationService.setAvatarState('talking');
+        console.log('🎤 Audio only (no lip-sync) → Avatar talking');
       }
 
       // Play audio
       await this.audioService.playAudio(message.audioUrl, message.id);
+      console.log('✅ Audio finished');
 
     } catch (error) {
       console.error('Error playing audio:', error);
     } finally {
-      message.isPlaying = false;
-      this.animationService.stopLipSync();
+      // Clean up only if this playback is still active
+      if (playbackId === undefined || playbackId === this.currentPlaybackId) {
+        message.isPlaying = false;
+        this.animationService.stopLipSync();
+        
+        // 🎯 CORRECT FLOW: talking → idle (after audio ends)
+        this.animationService.setAvatarState('idle');
+        console.log('🎤 Audio ended → Avatar idle');
+      }
     }
   }
 
   /**
-   * Replay button clicked
+   * 🎯 REPLAY: Should be idle → talking → idle (NO thinking state)
    */
   replayMessage(message: Message) {
-    this.playMessageAudio(message);
+    console.log('🔁 Replay button clicked');
+    
+    // Stop everything
+    this.stopAllPlayback();
+    this.currentPlaybackId++;
+    
+    // Small delay, then play with isReplay=true
+    setTimeout(() => {
+      this.playMessageAudio(message, this.currentPlaybackId, true); // true = IS a replay
+    }, 100);
+  }
+
+  /**
+   * Stop all audio playback and animations
+   */
+  private stopAllPlayback() {
+    this.audioService.stop();
+    this.animationService.stopLipSync();
+    this.messages.forEach(msg => msg.isPlaying = false);
+    console.log('🛑 Stopped all playback');
   }
 
   newChat() {
@@ -282,3 +347,16 @@ export class ChatInterfaceComponent implements AfterViewChecked {
     }
   }
 }
+
+// 🎯 ANIMATION STATE FLOW SUMMARY:
+// 
+// NEW MESSAGE:
+// 1. User types and sends → idle
+// 2. Backend processing → thinking (4-10 seconds)
+// 3. Response received, audio plays → talking
+// 4. Audio ends → idle
+//
+// REPLAY:
+// 1. User clicks replay → idle
+// 2. Audio plays immediately → talking (NO thinking)
+// 3. Audio ends → idle
